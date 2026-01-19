@@ -1,0 +1,54 @@
+# 系统配置
+system:
+  device: "cuda"  # cuda 或 cpu
+  log_level: "INFO"
+
+# 视频输入配置
+video:
+  source: "0"  # 摄像头ID、RTSP地址或视频文件路径
+  fps: 15
+  width: 1280
+  height: 720
+  resize: [640, 640]
+
+# YOLO 检测配置
+detector:
+  model_path: "yolov8n.pt"  # 模型路径
+  confidence: 0.5
+  iou_threshold: 0.45
+  classes: [2, 3, 5, 7]  # car, motorcycle, bus, truck
+  device: "cuda"
+
+# ByteTrack 跟踪配置
+tracker:
+  track_thresh: 0.5
+  track_buffer: 30
+  match_thresh: 0.8
+  min_box_area: 10
+
+# 特征分析配置
+feature:
+  speed_threshold: 60  # km/h 超速阈值
+  pixel_to_meter: 0.05  # 像素到米的转换系数（需标定）
+  fps: 15
+
+# 违规检测配置
+violation:
+  red_light_enabled: true
+  speeding_enabled: true
+  speed_limit: 60  # km/h
+
+# OCR 配置
+ocr:
+  use_gpu: true
+  lang: "ch"
+
+# 数据库配置
+database:
+  path: "data/traffic.db"
+
+# GUI 配置
+gui:
+  window_title: "实时交通分析系统"
+  window_size: [1400, 900]
+  theme: "dark"

@@ -11,8 +11,8 @@
 
 - Reply in **Chinese** unless I explicitly ask for English.
 - No emojis.
-- Do not truncate important outputs (logs, diffs, stack traces, commands,
-  or critical reasoning that affects safety/correctness).
+- 没有我的允许不能修改此claude.md文件
+- Do not truncate important outputs (logs, diffs, stack traces, commands,or critical reasoning that affects safety/correctness).
   
 ## Tech Stack
 - **Deep Learning**: PyTorch, YOLOv12 (Ultralytics)
