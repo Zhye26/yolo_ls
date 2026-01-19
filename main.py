@@ -5,7 +5,13 @@
 基于 YOLOv12 + ByteTrack 的智能交通监控系统
 功能：车辆检测、跟踪、特征提取、违规识别、数据可视化
 """
+import os
 import sys
+
+# 在导入任何Qt相关模块之前设置环境变量，避免OpenCV Qt插件冲突
+os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = ''  # 清除OpenCV的Qt路径
+os.environ.pop('QT_PLUGIN_PATH', None)  # 移除可能的冲突路径
+
 import argparse
 from pathlib import Path
 
@@ -29,10 +35,11 @@ def run_gui():
 
 
 def run_cli(args):
-    """运行命令行模式"""
+    """运行命令行模式（使用自适应违规检测）"""
     import cv2
     from src.video import VideoStream
-    from src.core import VehicleDetector, ByteTracker, FeatureExtractor, ViolationDetector
+    from src.core import VehicleDetector, ByteTracker, FeatureExtractor, AdaptiveViolationDetector
+    from src.database import Database
     from src.utils import load_config
 
     # 加载配置
@@ -56,9 +63,13 @@ def run_cli(args):
         pixel_to_meter=config.get('feature', {}).get('pixel_to_meter', 0.05),
         fps=config.get('video', {}).get('fps', 15)
     )
-    violation_detector = ViolationDetector(
-        speed_limit=config.get('violation', {}).get('speed_limit', 60)
+    # 使用自适应违规检测器
+    violation_detector = AdaptiveViolationDetector(
+        speed_limit=config.get('violation', {}).get('speed_limit', 60),
+        snapshot_dir=config.get('violation', {}).get('snapshot_dir', 'data/snapshots'),
+        emergency_distance=config.get('violation', {}).get('emergency_distance', 300)
     )
+    database = Database()
 
     if not video.open():
         print(f"Error: Cannot open video source: {args.source}")
@@ -66,6 +77,7 @@ def run_cli(args):
 
     print(f"Processing video: {args.source}")
     print(f"Model: {args.model}, Device: {args.device}")
+    print("自适应违规检测已启用（支持特种车辆避让免责）")
     print("Press 'q' to quit")
 
     frame_count = 0
@@ -82,46 +94,66 @@ def run_cli(args):
         # 跟踪
         tracks = tracker.update(detections)
 
-        # 特征提取
+        # 获取所有车辆边界框用于特种车辆检测
+        vehicle_bboxes = [t.bbox for t in tracks]
+        violation_detector.update(frame, vehicle_bboxes)
+
+        # 特征提取和违规检测
         for track in tracks:
             features = feature_extractor.extract(frame, track.track_id, track.bbox)
 
-            # 违规检测
-            violations = violation_detector.check_violations(
-                track.track_id, track.center, features.speed, frame
+            # 自适应违规检测
+            record = violation_detector.check_violation(
+                track_id=track.track_id,
+                bbox=track.bbox,
+                speed=features.speed,
+                frame=frame
             )
 
-            # 绘制
-            x1, y1, x2, y2 = track.bbox
-            color = (0, 255, 0)
-            if violations:
-                color = (0, 0, 255)
+            # 保存违规记录到数据库
+            if record:
+                database.add_violation(
+                    track_id=record.track_id,
+                    violation_type=record.violation_type.value,
+                    location=record.location,
+                    speed=record.speed,
+                    snapshot_path=record.snapshot_path,
+                    record_id=record.record_id,
+                    is_exempted=record.is_exempted,
+                    exemption_reason=record.exemption_reason.value if record.is_exempted else None,
+                    exemption_details=record.exemption_details,
+                    nearby_emergency_vehicles=record.nearby_emergency_vehicles
+                )
 
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            label = f"ID:{track.track_id} {features.color} {features.speed:.1f}km/h"
-            cv2.putText(frame, label, (x1, y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        # 绘制标注
+        annotated = violation_detector.draw_annotations(frame)
+        for track in tracks:
+            x1, y1, x2, y2 = track.bbox
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
         # 显示统计
-        cv2.putText(frame, f"Vehicles: {len(tracks)}", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        cv2.putText(frame, f"Frame: {frame_count}", (10, 60),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        stats = violation_detector.get_statistics()
+        cv2.putText(annotated, f"Vehicles: {len(tracks)}", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        cv2.putText(annotated, f"Violations: {stats['actual_violations']} | Exempted: {stats['exempted_count']}",
+                    (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
         # 显示
         if not args.headless:
-            cv2.imshow("Traffic Analysis", frame)
+            cv2.imshow("Traffic Analysis - Adaptive Detection", annotated)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
 
-        # 保存输出
-        if args.output:
-            # TODO: 实现视频输出
-            pass
-
     video.release()
     cv2.destroyAllWindows()
-    print(f"Processed {frame_count} frames")
+
+    # 输出最终统计
+    final_stats = violation_detector.get_statistics()
+    print(f"\n=== 处理完成 ===")
+    print(f"处理帧数: {frame_count}")
+    print(f"总违规数: {final_stats['total_violations']}")
+    print(f"实际违规: {final_stats['actual_violations']}")
+    print(f"特殊情况(免责): {final_stats['exempted_count']}")
     return 0
 
 
@@ -140,8 +172,8 @@ def main():
         help='视频源（摄像头ID、RTSP地址或视频文件路径）'
     )
     parser.add_argument(
-        '--model', type=str, default='yolo12n.pt',
-        help='YOLOv12 模型路径'
+        '--model', type=str, default='models/yolo12n.pt',
+        help='YOLOv12 model path'
     )
     parser.add_argument(
         '--confidence', type=float, default=0.5,

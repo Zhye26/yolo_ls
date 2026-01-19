@@ -44,7 +44,8 @@ COPY requirements.txt .
 
 # 安装 Python 依赖（使用国内镜像加速）
 RUN pip3 install --no-cache-dir --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple && \
-    pip3 install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+    pip3 install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple && \
+    rm -rf /usr/local/lib/python3.10/dist-packages/cv2/qt
 
 # 复制项目文件
 COPY . .
@@ -53,8 +54,11 @@ COPY . .
 RUN mkdir -p /app/data /app/models
 
 # 设置 Qt 环境变量（用于 GUI）
+# 使用PyQt5的Qt插件，避免与OpenCV的Qt冲突
 ENV QT_X11_NO_MITSHM=1
 ENV DISPLAY=:0
+ENV QT_QPA_PLATFORM_PLUGIN_PATH=/usr/local/lib/python3.10/dist-packages/PyQt5/Qt5/plugins/platforms
+ENV QT_PLUGIN_PATH=/usr/local/lib/python3.10/dist-packages/PyQt5/Qt5/plugins
 
 # 暴露端口
 EXPOSE 8000

@@ -103,10 +103,8 @@ class PlateOCR:
         try:
             from paddleocr import PaddleOCR
             self.ocr = PaddleOCR(
-                use_angle_cls=True,
                 lang='ch',
-                use_gpu=self.use_gpu,
-                show_log=False
+                use_textline_orientation=True
             )
         except ImportError:
             print("Warning: PaddleOCR not installed, OCR disabled")
