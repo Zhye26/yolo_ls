@@ -1,5 +1,5 @@
-# 基于 NVIDIA CUDA 镜像，支持 GPU
-FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
+# 使用 Ubuntu 基础镜像
+FROM ubuntu:22.04
 
 # 设置环境变量
 ENV DEBIAN_FRONTEND=noninteractive
@@ -42,9 +42,9 @@ WORKDIR /app
 # 复制依赖文件
 COPY requirements.txt .
 
-# 安装 Python 依赖
-RUN pip3 install --no-cache-dir --upgrade pip && \
-    pip3 install --no-cache-dir -r requirements.txt
+# 安装 Python 依赖（使用国内镜像加速）
+RUN pip3 install --no-cache-dir --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple && \
+    pip3 install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 复制项目文件
 COPY . .
@@ -56,7 +56,7 @@ RUN mkdir -p /app/data /app/models
 ENV QT_X11_NO_MITSHM=1
 ENV DISPLAY=:0
 
-# 暴露端口（如果需要 Web 服务）
+# 暴露端口
 EXPOSE 8000
 
 # 默认命令
