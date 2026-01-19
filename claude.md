@@ -3,6 +3,10 @@
 ## Project Overview
 基于 YOLOv12 + ByteTrack 的实时交通分析系统，实现车辆检测、跟踪、特征提取、违规识别等功能。
 
+## Repository
+- **GitHub**: https://github.com/Zhye26/yolo_ls
+- **Author**: Zhye26
+
 ## Defaults
 
 - Reply in **Chinese** unless I explicitly ask for English.
