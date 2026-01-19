@@ -118,7 +118,7 @@ class MainWindow(QMainWindow):
         # 配置
         self.config = {
             'fps': 15,
-            'model_path': 'yolov8n.pt',
+            'model_path': 'yolo12n.pt',
             'confidence': 0.5,
             'device': 'cuda',
             'track_thresh': 0.5,

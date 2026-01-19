@@ -13,7 +13,7 @@ video:
 
 # YOLO 检测配置
 detector:
-  model_path: "yolov8n.pt"  # 模型路径
+  model_path: "yolo12n.pt"  # YOLOv12 模型路径
   confidence: 0.5
   iou_threshold: 0.45
   classes: [2, 3, 5, 7]  # car, motorcycle, bus, truck

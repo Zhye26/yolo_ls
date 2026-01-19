@@ -140,8 +140,8 @@ def main():
         help='视频源（摄像头ID、RTSP地址或视频文件路径）'
     )
     parser.add_argument(
-        '--model', type=str, default='yolov8n.pt',
-        help='YOLO 模型路径'
+        '--model', type=str, default='yolo12n.pt',
+        help='YOLOv12 模型路径'
     )
     parser.add_argument(
         '--confidence', type=float, default=0.5,

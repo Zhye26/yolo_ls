@@ -45,7 +45,7 @@ class VehicleDetector:
     # 交通灯类别
     TRAFFIC_LIGHT_CLASS = 9
 
-    def __init__(self, model_path: str = "yolov8n.pt",
+    def __init__(self, model_path: str = "yolo12n.pt",
                  confidence: float = 0.5,
                  iou_threshold: float = 0.45,
                  device: str = "cuda"):
