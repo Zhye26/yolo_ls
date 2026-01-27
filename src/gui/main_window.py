@@ -5,6 +5,8 @@ and collision risk prediction.
 """
 import cv2
 import numpy as np
+from collections import deque
+from datetime import datetime
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QFileDialog, QTableWidget,
@@ -14,9 +16,15 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QThread
 from PyQt5.QtGui import QImage, QPixmap, QColor, QFont
-from typing import Optional, List
+from typing import Optional, List, Dict
 import sys
 from pathlib import Path
+
+import matplotlib
+matplotlib.use('Qt5Agg')
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+import matplotlib.pyplot as plt
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -26,6 +34,128 @@ from src.core.adaptive_violation import AdaptiveViolationDetector, ViolationReco
 from src.core.stgat import VehicleInteractionGraph
 from src.core.collision_risk import CollisionRiskPredictor, RiskLevel
 from src.database import Database
+
+
+class StatisticsCanvas(FigureCanvas):
+    """Matplotlib canvas for statistics charts"""
+
+    def __init__(self, parent=None):
+        self.fig = Figure(figsize=(5, 4), dpi=100, facecolor='#1a1a2e')
+        super().__init__(self.fig)
+        self.setParent(parent)
+
+        # Data storage
+        self.time_data = deque(maxlen=60)
+        self.vehicle_count_data = deque(maxlen=60)
+        self.speed_data = deque(maxlen=100)
+        self.violation_counts: Dict[str, int] = {}
+        self.vehicle_type_counts: Dict[str, int] = {}
+
+        # Create subplots
+        self.ax_flow = self.fig.add_subplot(2, 2, 1)
+        self.ax_violation = self.fig.add_subplot(2, 2, 2)
+        self.ax_speed = self.fig.add_subplot(2, 2, 3)
+        self.ax_type = self.fig.add_subplot(2, 2, 4)
+
+        self._setup_style()
+        self.fig.tight_layout(pad=2.0)
+
+    def _setup_style(self):
+        """Setup chart style"""
+        for ax in [self.ax_flow, self.ax_violation, self.ax_speed, self.ax_type]:
+            ax.set_facecolor('#2d2d44')
+            ax.tick_params(colors='white', labelsize=8)
+            for spine in ax.spines.values():
+                spine.set_color('#4a4a6a')
+            ax.title.set_color('white')
+
+        self.ax_flow.set_title('Traffic Flow', fontsize=10)
+        self.ax_violation.set_title('Violation Types', fontsize=10)
+        self.ax_speed.set_title('Speed Distribution', fontsize=10)
+        self.ax_type.set_title('Vehicle Types', fontsize=10)
+
+    def update_data(self, vehicle_count: int, speeds: List[float],
+                    violations: Dict[str, int], vehicle_types: Dict[str, int]):
+        """Update chart data"""
+        self.time_data.append(datetime.now().strftime('%H:%M:%S'))
+        self.vehicle_count_data.append(vehicle_count)
+
+        for speed in speeds:
+            if speed > 0:
+                self.speed_data.append(speed)
+
+        for vtype, count in violations.items():
+            self.violation_counts[vtype] = self.violation_counts.get(vtype, 0) + count
+
+        for vtype, count in vehicle_types.items():
+            self.vehicle_type_counts[vtype] = self.vehicle_type_counts.get(vtype, 0) + count
+
+        self._redraw()
+
+    def _redraw(self):
+        """Redraw all charts"""
+        # Traffic flow
+        self.ax_flow.clear()
+        self._setup_ax(self.ax_flow, 'Traffic Flow')
+        if self.vehicle_count_data:
+            x = list(range(len(self.vehicle_count_data)))
+            self.ax_flow.plot(x, list(self.vehicle_count_data), color='#00ff88', linewidth=2)
+            self.ax_flow.fill_between(x, list(self.vehicle_count_data), alpha=0.3, color='#00ff88')
+            self.ax_flow.set_ylabel('Count', fontsize=8, color='white')
+
+        # Violation pie
+        self.ax_violation.clear()
+        self._setup_ax(self.ax_violation, 'Violation Types')
+        if self.violation_counts:
+            labels = list(self.violation_counts.keys())
+            sizes = list(self.violation_counts.values())
+            colors = ['#ff6b6b', '#ffd93d', '#6bcb77', '#4d96ff'][:len(labels)]
+            self.ax_violation.pie(sizes, labels=labels, colors=colors, autopct='%1.0f%%',
+                                  textprops={'color': 'white', 'fontsize': 7})
+        else:
+            self.ax_violation.text(0.5, 0.5, 'No Data', ha='center', va='center', color='gray', fontsize=10)
+
+        # Speed histogram
+        self.ax_speed.clear()
+        self._setup_ax(self.ax_speed, 'Speed Distribution')
+        if self.speed_data:
+            self.ax_speed.hist(list(self.speed_data), bins=15, color='#4d96ff', alpha=0.7, edgecolor='white')
+            self.ax_speed.axvline(x=60, color='#ff6b6b', linestyle='--', linewidth=1.5)
+            self.ax_speed.set_xlabel('km/h', fontsize=8, color='white')
+        else:
+            self.ax_speed.text(0.5, 0.5, 'No Data', ha='center', va='center', color='gray', fontsize=10)
+
+        # Vehicle type bar
+        self.ax_type.clear()
+        self._setup_ax(self.ax_type, 'Vehicle Types')
+        if self.vehicle_type_counts:
+            types = list(self.vehicle_type_counts.keys())
+            counts = list(self.vehicle_type_counts.values())
+            colors = ['#6bcb77', '#4d96ff', '#ffd93d', '#ff6b6b'][:len(types)]
+            self.ax_type.bar(types, counts, color=colors)
+            self.ax_type.tick_params(axis='x', labelrotation=15)
+        else:
+            self.ax_type.text(0.5, 0.5, 'No Data', ha='center', va='center', color='gray', fontsize=10)
+
+        self.fig.tight_layout(pad=2.0)
+        self.draw()
+
+    def _setup_ax(self, ax, title: str):
+        """Setup axis style"""
+        ax.set_facecolor('#2d2d44')
+        ax.tick_params(colors='white', labelsize=7)
+        for spine in ax.spines.values():
+            spine.set_color('#4a4a6a')
+        ax.set_title(title, fontsize=10, color='white')
+
+    def reset(self):
+        """Reset all data"""
+        self.time_data.clear()
+        self.vehicle_count_data.clear()
+        self.speed_data.clear()
+        self.violation_counts.clear()
+        self.vehicle_type_counts.clear()
+        self._redraw()
 
 
 class VideoThread(QThread):
@@ -372,6 +502,30 @@ Snapshot filenames include timestamp for later manual review.</p>
 
         right_panel.addTab(exemption_tab, "Special Cases")
 
+        # ===== Statistics Tab =====
+        stats_tab = QWidget()
+        stats_tab_layout = QVBoxLayout(stats_tab)
+        self.stats_canvas = StatisticsCanvas(stats_tab)
+        stats_tab_layout.addWidget(self.stats_canvas)
+
+        btn_reset_stats = QPushButton("Reset Statistics")
+        btn_reset_stats.clicked.connect(self._reset_statistics)
+        btn_reset_stats.setStyleSheet("""
+            QPushButton {
+                background-color: #4a4a6a;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 8px 16px;
+            }
+            QPushButton:hover {
+                background-color: #5a5a7a;
+            }
+        """)
+        stats_tab_layout.addWidget(btn_reset_stats)
+
+        right_panel.addTab(stats_tab, "Statistics")
+
         # ===== Settings Tab =====
         settings_tab = QWidget()
         settings_layout = QVBoxLayout(settings_tab)
@@ -573,6 +727,31 @@ Snapshot filenames include timestamp for later manual review.</p>
         for record in violations:
             self._add_violation_record(record)
 
+        # Update statistics charts (every 30 frames to reduce overhead)
+        if hasattr(self, '_frame_counter'):
+            self._frame_counter += 1
+        else:
+            self._frame_counter = 0
+
+        if self._frame_counter % 30 == 0:
+            speeds = [f.speed for f in features_list if f.speed > 0]
+            violation_dict = {}
+            for v in violations:
+                vtype = v.violation_type.value
+                violation_dict[vtype] = violation_dict.get(vtype, 0) + 1
+
+            vehicle_types = {}
+            for track in tracks:
+                vtype = track.class_name
+                vehicle_types[vtype] = vehicle_types.get(vtype, 0) + 1
+
+            self.stats_canvas.update_data(
+                vehicle_count=len(tracks),
+                speeds=speeds,
+                violations=violation_dict,
+                vehicle_types=vehicle_types
+            )
+
     def _on_stats_updated(self, stats: dict):
         """Update statistics"""
         self.label_emergency_count.setText(f"Emergency Vehicles: {stats.get('emergency_vehicles', 0)}")
@@ -678,6 +857,12 @@ Snapshot filenames include timestamp for later manual review.</p>
             )
         else:
             QMessageBox.information(self, "Search Results", "No matching records found")
+
+    def _reset_statistics(self):
+        """Reset statistics charts"""
+        self.stats_canvas.reset()
+        self._frame_counter = 0
+        self.statusBar.showMessage("Statistics reset")
 
     def _on_error(self, error: str):
         """Handle error"""
