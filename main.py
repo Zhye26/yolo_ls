@@ -172,7 +172,7 @@ def main():
         help='视频源（摄像头ID、RTSP地址或视频文件路径）'
     )
     parser.add_argument(
-        '--model', type=str, default='models/yolo12n.pt',
+        '--model', type=str, default='models/yolo12n_vehicle.pt',
         help='YOLOv12 model path'
     )
     parser.add_argument(
