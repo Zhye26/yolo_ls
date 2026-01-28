@@ -4,71 +4,78 @@
 
 ## 系统要求
 
-- Docker (必须)
-- 显示器 (GUI模式需要)
+- Python 3.10+
+- NVIDIA GPU + CUDA（可选，CPU 也能运行）
+- 8GB+ 内存
+- 显示器（GUI 模式需要）
 
 ## 快速开始
 
-### 1. 构建Docker镜像
+### 方式一：本地 Python 环境（推荐）
 
 ```bash
-docker build -t traffic-analysis:latest .
+# 1. 克隆项目
+git clone https://github.com/Zhye26/yolo_ls.git
+cd yolo_ls
+
+# 2. 创建虚拟环境
+python3 -m venv venv
+source venv/bin/activate  # Linux/macOS
+# venv\Scripts\activate   # Windows
+
+# 3. 安装依赖
+pip install -r requirements.txt
+
+# 4. 运行 GUI
+python3 main.py --gui
+
+# 或处理视频文件
+python3 main.py --source video.mp4
+
+# 或使用摄像头
+python3 main.py --source 0
 ```
 
-### 2. 运行方式
-
-#### 方式A: 批量检测（推荐，无需显示器）
+### 方式二：Docker
 
 ```bash
-# Linux/macOS
+# 1. 克隆项目
+git clone https://github.com/Zhye26/yolo_ls.git
+cd yolo_ls
+
+# 2. 构建镜像
+docker build -t traffic-analysis:latest .
+
+# 3. 运行（Linux）
+xhost +local:docker
+docker run --rm \
+  -e DISPLAY=$DISPLAY \
+  -v /tmp/.X11-unix:/tmp/.X11-unix \
+  -v $(pwd):/app \
+  traffic-analysis:latest
+
+# 3. 运行（Windows，需安装 VcXsrv）
+docker run --rm -e DISPLAY=host.docker.internal:0 -v ${PWD}:/app traffic-analysis:latest
+```
+
+### 批量检测（无需显示器）
+
+```bash
+# 本地运行
+python3 scripts/batch_detect.py -i /path/to/video.mp4 -o ./output -n 10
+
+# Docker 运行
 docker run --rm \
   -v $(pwd):/app \
-  -v /path/to/your/videos:/videos \
+  -v /path/to/videos:/videos \
   traffic-analysis:latest \
-  python3 scripts/batch_detect.py -i /videos/your_video.mp4 -o /app/data/results -n 10
-
-# Windows PowerShell
-docker run --rm -v ${PWD}:/app -v C:\your\videos:/videos traffic-analysis:latest python3 scripts/batch_detect.py -i /videos/your_video.mp4 -o /app/data/results -n 10
+  python3 scripts/batch_detect.py -i /videos/video.mp4 -o /app/output -n 10
 ```
 
 参数说明:
 - `-i`: 输入视频文件或目录
 - `-o`: 输出目录
 - `-n`: 抽帧间隔（每N帧保存一次，默认30）
-
-输出文件:
-- `frame_*_orig.jpg` - 原始帧
-- `frame_*_detect.jpg` - 检测结果（带风险颜色标注）
-- `results.json` - 详细数据
-
-#### 方式B: GUI界面（需要显示器）
-
-```bash
-# Linux
-xhost +local:docker
-docker run --rm \
-  -e DISPLAY=$DISPLAY \
-  -v /tmp/.X11-unix:/tmp/.X11-unix \
-  -v $(pwd):/app \
-  traffic-analysis:latest \
-  python3 -m src.gui.main_window
-
-# Windows (需要VcXsrv)
-docker run --rm -e DISPLAY=host.docker.internal:0 -v ${PWD}:/app traffic-analysis:latest python3 -m src.gui.main_window
-```
-
-### 3. 运行测试
-
-```bash
-# 测试自适应违规检测
-docker run --rm -v $(pwd):/app traffic-analysis:latest python3 tests/test_adaptive_violation.py
-
-# 测试碰撞风险预测
-docker run --rm -v $(pwd):/app traffic-analysis:latest python3 tests/test_stgat_collision.py
-
-# 碰撞风险演示
-docker run --rm -v $(pwd):/app traffic-analysis:latest python3 scripts/demo_collision.py
-```
 
 ---
 
