@@ -33,6 +33,7 @@ from src.core import VehicleDetector, ByteTracker, FeatureExtractor
 from src.core.adaptive_violation import AdaptiveViolationDetector, ViolationRecord, ExemptionReason
 from src.core.stgat import VehicleInteractionGraph
 from src.core.collision_risk import CollisionRiskPredictor, RiskLevel
+from src.ocr import PlateReader
 from src.database import Database
 
 
@@ -160,7 +161,7 @@ class StatisticsCanvas(FigureCanvas):
 
 class VideoThread(QThread):
     """Video processing thread"""
-    frame_ready = pyqtSignal(np.ndarray, list, list, list, list)  # Added risks
+    frame_ready = pyqtSignal(np.ndarray, list, list, list, list, dict)  # Added plate_results
     stats_updated = pyqtSignal(dict)
     error = pyqtSignal(str)
 
@@ -177,6 +178,7 @@ class VideoThread(QThread):
         self.violation_detector: Optional[AdaptiveViolationDetector] = None
         self.interaction_graph: Optional[VehicleInteractionGraph] = None
         self.collision_predictor: Optional[CollisionRiskPredictor] = None
+        self.plate_reader: Optional[PlateReader] = None
 
     def run(self):
         """Run video processing"""
@@ -219,6 +221,12 @@ class VideoThread(QThread):
                 fps=self.config.get('fps', 15)
             )
 
+            # Initialize Plate Reader
+            self.plate_reader = PlateReader(
+                model_path=self.config.get('plate_model_path', 'models/plate_ocr.pt'),
+                use_gpu=self.config.get('device', 'cpu') != 'cpu'
+            )
+
             if self.config.get('stop_line'):
                 sl = self.config['stop_line']
                 self.violation_detector.set_stop_line(sl['y'], sl['x_start'], sl['x_end'])
@@ -251,6 +259,7 @@ class VideoThread(QThread):
 
                 features_list = []
                 violations = []
+                plate_results = {}  # track_id -> plate_number
 
                 for track in tracks:
                     features = self.feature_extractor.extract(
@@ -267,14 +276,20 @@ class VideoThread(QThread):
                     if record:
                         violations.append(record)
 
+                    # 车牌识别（每10帧识别一次以减少计算量）
+                    if frame_count % 10 == 0 and self.plate_reader:
+                        plate_result = self.plate_reader.read(frame, track.bbox)
+                        if plate_result:
+                            plate_results[track.track_id] = plate_result.plate_number
+
                 # Draw annotations including collision risks
                 annotated_frame = self.violation_detector.draw_annotations(frame)
                 if collision_risks:
                     annotated_frame = self.collision_predictor.draw_predictions(
-                        annotated_frame, collision_risks
+                        annotated_frame, collision_risks, track_data
                     )
 
-                self.frame_ready.emit(annotated_frame, tracks, features_list, violations, collision_risks)
+                self.frame_ready.emit(annotated_frame, tracks, features_list, violations, collision_risks, plate_results)
 
                 if frame_count % 30 == 0:
                     stats = self.violation_detector.get_statistics()
@@ -311,9 +326,10 @@ class MainWindow(QMainWindow):
 
         self.config = {
             'fps': 15,
-            'model_path': 'models/yolo12n.pt',
+            'model_path': 'models/yolo12n_vehicle.pt',
+            'plate_model_path': 'models/plate_ocr.pt',
             'confidence': 0.5,
-            'device': 'cpu',
+            'device': 'cuda',
             'track_thresh': 0.5,
             'track_buffer': 30,
             'pixel_to_meter': 0.05,
@@ -427,9 +443,9 @@ class MainWindow(QMainWindow):
         vehicle_group = QGroupBox("Detected Vehicles")
         vehicle_layout = QVBoxLayout(vehicle_group)
         self.vehicle_table = QTableWidget()
-        self.vehicle_table.setColumnCount(5)
+        self.vehicle_table.setColumnCount(6)
         self.vehicle_table.setHorizontalHeaderLabels(
-            ["ID", "Type", "Color", "Speed(km/h)", "Direction"]
+            ["ID", "Type", "Color", "Speed(km/h)", "Direction", "Plate"]
         )
         self.vehicle_table.horizontalHeader().setStretchLastSection(True)
         vehicle_layout.addWidget(self.vehicle_table)
@@ -658,19 +674,35 @@ Snapshot filenames include timestamp for later manual review.</p>
         self.statusBar.showMessage("Stopped")
 
     def _on_frame_ready(self, frame: np.ndarray, tracks: list,
-                        features_list: list, violations: list, collision_risks: list = None):
+                        features_list: list, violations: list,
+                        collision_risks: list = None, plate_results: dict = None):
         """Process frame"""
         self.current_frame = frame.copy()
+
+        # 保存车牌识别结果
+        if plate_results:
+            if not hasattr(self, '_plate_cache'):
+                self._plate_cache = {}
+            self._plate_cache.update(plate_results)
 
         for i, track in enumerate(tracks):
             x1, y1, x2, y2 = track.bbox
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
+            # 构建标签
             if i < len(features_list):
                 f = features_list[i]
                 label = f"ID:{track.track_id} {f.color} {f.speed:.1f}km/h"
             else:
                 label = f"ID:{track.track_id} {track.class_name}"
+
+            # 添加车牌信息
+            plate = getattr(self, '_plate_cache', {}).get(track.track_id)
+            if plate:
+                label += f" [{plate}]"
+                # 在车辆下方显示车牌号
+                cv2.putText(frame, plate, (x1, y2 + 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
             cv2.putText(frame, label, (x1, y1 - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
@@ -723,6 +755,10 @@ Snapshot filenames include timestamp for later manual review.</p>
                 self.vehicle_table.setItem(i, 2, QTableWidgetItem("-"))
                 self.vehicle_table.setItem(i, 3, QTableWidgetItem("-"))
                 self.vehicle_table.setItem(i, 4, QTableWidgetItem("-"))
+
+            # 添加车牌信息
+            plate = getattr(self, '_plate_cache', {}).get(track.track_id, "-")
+            self.vehicle_table.setItem(i, 5, QTableWidgetItem(plate if plate else "-"))
 
         for record in violations:
             self._add_violation_record(record)

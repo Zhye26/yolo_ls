@@ -418,12 +418,12 @@ class CollisionRiskPredictor:
 
         return min(confidence, 1.0)
 
-    def draw_predictions(self, frame: np.ndarray,
-                         risks: List[CollisionRisk]) -> np.ndarray:
-        """Draw trajectory predictions and risk indicators on frame"""
-        annotated = frame.copy()
-
-        # Color mapping for risk levels
+    def get_vehicle_risk_colors(self, risks: List[CollisionRisk]) -> Dict[int, Tuple[int, int, int]]:
+        """
+        获取每个车辆的风险颜色
+        Returns:
+            Dict mapping track_id to BGR color tuple
+        """
         colors = {
             RiskLevel.SAFE: (0, 255, 0),      # Green
             RiskLevel.LOW: (0, 255, 255),     # Yellow
@@ -432,31 +432,99 @@ class CollisionRiskPredictor:
             RiskLevel.CRITICAL: (255, 0, 255) # Magenta
         }
 
+        vehicle_colors: Dict[int, Tuple[int, int, int]] = {}
+
         for risk in risks:
             color = colors[risk.risk_level]
+            # 为涉及风险的两辆车都设置颜色（取最高风险等级）
+            for vid in [risk.vehicle1_id, risk.vehicle2_id]:
+                if vid not in vehicle_colors:
+                    vehicle_colors[vid] = color
+                else:
+                    # 如果已有颜色，保留更高风险的颜色
+                    existing_risk = self._color_to_risk_level(vehicle_colors[vid], colors)
+                    new_risk = risk.risk_level
+                    if self._risk_level_priority(new_risk) < self._risk_level_priority(existing_risk):
+                        vehicle_colors[vid] = color
 
-            # Draw predicted trajectories
-            for tid, traj in risk.predicted_trajectories.items():
-                points = [(int(p[0]), int(p[1])) for p in traj]
-                for i in range(1, len(points)):
-                    # Fade color along trajectory
-                    alpha = 1 - (i / len(points))
-                    cv2.line(annotated, points[i-1], points[i],
-                             tuple(int(c * alpha) for c in color), 2)
+        return vehicle_colors
 
-            # Draw collision point
-            if risk.collision_point:
-                cp = (int(risk.collision_point[0]), int(risk.collision_point[1]))
-                cv2.circle(annotated, cp, 15, color, 3)
-                cv2.circle(annotated, cp, 8, color, -1)
+    def _color_to_risk_level(self, color: Tuple[int, int, int],
+                              colors: Dict[RiskLevel, Tuple[int, int, int]]) -> RiskLevel:
+        """根据颜色反查风险等级"""
+        for level, c in colors.items():
+            if c == color:
+                return level
+        return RiskLevel.SAFE
 
-                # Draw warning text
-                if risk.time_to_collision > 0:
-                    text = f"TTC: {risk.time_to_collision:.1f}s"
-                    cv2.putText(annotated, text, (cp[0] + 20, cp[1]),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+    def _risk_level_priority(self, level: RiskLevel) -> int:
+        """风险等级优先级（数字越小优先级越高）"""
+        priority = {
+            RiskLevel.CRITICAL: 0,
+            RiskLevel.HIGH: 1,
+            RiskLevel.MEDIUM: 2,
+            RiskLevel.LOW: 3,
+            RiskLevel.SAFE: 4
+        }
+        return priority.get(level, 4)
 
-        # Draw risk summary
+    def draw_predictions(self, frame: np.ndarray,
+                         risks: List[CollisionRisk],
+                         tracks: List[Dict] = None) -> np.ndarray:
+        """
+        Draw collision risk indicators on frame
+        Args:
+            frame: Input frame
+            risks: List of collision risks
+            tracks: Optional list of track dicts with bbox for drawing colored boxes
+        """
+        annotated = frame.copy()
+
+        colors = {
+            RiskLevel.SAFE: (0, 255, 0),      # Green
+            RiskLevel.LOW: (0, 255, 255),     # Yellow
+            RiskLevel.MEDIUM: (0, 165, 255),  # Orange
+            RiskLevel.HIGH: (0, 0, 255),      # Red
+            RiskLevel.CRITICAL: (255, 0, 255) # Magenta
+        }
+
+        # 获取每个车辆的风险颜色
+        vehicle_colors = self.get_vehicle_risk_colors(risks)
+
+        # 如果提供了 tracks，为有风险的车辆画彩色边框
+        if tracks:
+            for track in tracks:
+                tid = track['track_id']
+                bbox = track['bbox']
+                if tid in vehicle_colors:
+                    color = vehicle_colors[tid]
+                    x1, y1, x2, y2 = [int(v) for v in bbox]
+                    # 画粗边框表示风险
+                    cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 4)
+                    # 画内边框增强效果
+                    cv2.rectangle(annotated, (x1+2, y1+2), (x2-2, y2-2), color, 2)
+
+        # 绘制预测轨迹线（可选，用虚线表示）
+        for risk in risks:
+            if risk.risk_level in [RiskLevel.HIGH, RiskLevel.CRITICAL]:
+                color = colors[risk.risk_level]
+                for tid, traj in risk.predicted_trajectories.items():
+                    points = [(int(p[0]), int(p[1])) for p in traj]
+                    for i in range(1, len(points), 2):  # 虚线效果
+                        alpha = 1 - (i / len(points))
+                        cv2.line(annotated, points[i-1], points[i],
+                                 tuple(int(c * alpha) for c in color), 2)
+
+                # 绘制碰撞点（小圆点）
+                if risk.collision_point:
+                    cp = (int(risk.collision_point[0]), int(risk.collision_point[1]))
+                    cv2.circle(annotated, cp, 8, color, -1)
+                    if risk.time_to_collision > 0:
+                        text = f"TTC:{risk.time_to_collision:.1f}s"
+                        cv2.putText(annotated, text, (cp[0] + 10, cp[1]),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+        # 绘制风险摘要
         if risks:
             highest_risk = risks[0]
             text = f"Risk: {highest_risk.risk_level.value.upper()}"
