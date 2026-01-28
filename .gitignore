@@ -38,6 +38,10 @@ Thumbs.db
 *.log
 logs/
 
+# Training outputs
+runs/
+experiments/
+
 # Database
 *.db
 *.sqlite
