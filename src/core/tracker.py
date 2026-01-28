@@ -216,7 +216,6 @@ class ByteTracker:
                     'class_name': low_info[det_idx][1],
                     'confidence': low_dets[det_idx, 4]
                 }
-                unmatched_trks = [i for i in unmatched_trks if i != real_trk_idx]
 
         # 为未匹配的高置信度检测创建新跟踪器
         for det_idx in unmatched_dets:

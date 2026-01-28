@@ -46,7 +46,7 @@ class VehicleDetector:
     TRAFFIC_LIGHT_CLASS = 9
 
     def __init__(self, model_path: str = "yolo12n.pt",
-                 confidence: float = 0.5,
+                 confidence: float = 0.2,
                  iou_threshold: float = 0.45,
                  device: str = "cuda"):
         """

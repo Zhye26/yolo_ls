@@ -176,7 +176,7 @@ def main():
         help='YOLOv12 model path'
     )
     parser.add_argument(
-        '--confidence', type=float, default=0.5,
+        '--confidence', type=float, default=0.2,
         help='检测置信度阈值'
     )
     parser.add_argument(

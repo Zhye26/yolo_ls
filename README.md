@@ -187,7 +187,7 @@ yolo_ls/
 ```python
 from src.core import VehicleDetector
 
-detector = VehicleDetector(model_path='models/yolo12n.pt', confidence=0.5)
+detector = VehicleDetector(model_path='models/yolo12n.pt', confidence=0.2)
 detections = detector.detect_vehicles(frame)
 # 返回: [Detection(bbox, confidence, class_name), ...]
 ```

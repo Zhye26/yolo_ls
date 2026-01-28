@@ -14,7 +14,7 @@ video:
 # YOLO 检测配置
 detector:
   model_path: "models/yolo12n_vehicle.pt"  # 训练后的车辆检测模型
-  confidence: 0.5
+  confidence: 0.2
   iou_threshold: 0.45
   classes: [0, 1, 2, 3, 5]  # 3wheeler, bike, bus, car, truck (排除 person)
   device: "cuda"

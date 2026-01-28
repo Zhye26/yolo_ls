@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.video import VideoStream
 from src.core import VehicleDetector, ByteTracker, FeatureExtractor
-from src.core.adaptive_violation import AdaptiveViolationDetector, ViolationRecord, ExemptionReason
+from src.core.adaptive_violation import AdaptiveViolationDetector, ViolationRecord, AnomalyReason
 from src.core.stgat import VehicleInteractionGraph
 from src.core.collision_risk import CollisionRiskPredictor, RiskLevel
 from src.ocr import PlateReader
@@ -328,7 +328,7 @@ class MainWindow(QMainWindow):
             'fps': 15,
             'model_path': 'models/yolo12n_vehicle.pt',
             'plate_model_path': 'models/plate_ocr.pt',
-            'confidence': 0.5,
+            'confidence': 0.2,
             'device': 'cuda',
             'track_thresh': 0.5,
             'track_buffer': 30,
@@ -553,7 +553,7 @@ Snapshot filenames include timestamp for later manual review.</p>
         conf_layout.addWidget(QLabel("Confidence:"))
         self.spin_confidence = QSpinBox()
         self.spin_confidence.setRange(1, 100)
-        self.spin_confidence.setValue(50)
+        self.spin_confidence.setValue(20)
         self.spin_confidence.setSuffix("%")
         conf_layout.addWidget(self.spin_confidence)
         detect_layout.addLayout(conf_layout)
@@ -819,9 +819,9 @@ Snapshot filenames include timestamp for later manual review.</p>
 
     def _add_violation_record(self, record: ViolationRecord):
         """Add violation record to table"""
-        if self.cb_only_exempted.isChecked() and not record.is_exempted:
+        if self.cb_only_exempted.isChecked() and not record.is_anomaly:
             return
-        if not self.cb_show_exempted.isChecked() and record.is_exempted:
+        if not self.cb_show_exempted.isChecked() and record.is_anomaly:
             return
 
         row = self.violation_table.rowCount()
@@ -840,8 +840,8 @@ Snapshot filenames include timestamp for later manual review.</p>
         speed_str = f"{record.speed:.1f}" if record.speed else "-"
         self.violation_table.setItem(row, 3, QTableWidgetItem(speed_str))
 
-        status_item = QTableWidgetItem("Exempted" if record.is_exempted else "Violation")
-        if record.is_exempted:
+        status_item = QTableWidgetItem("Anomaly" if record.is_anomaly else "Violation")
+        if record.is_anomaly:
             status_item.setBackground(QColor("#ffd93d"))
             status_item.setForeground(QColor("#000"))
         else:
@@ -850,19 +850,17 @@ Snapshot filenames include timestamp for later manual review.</p>
         self.violation_table.setItem(row, 4, status_item)
 
         reason = ""
-        if record.is_exempted:
+        if record.is_anomaly:
             reason_map = {
-                ExemptionReason.YIELD_TO_EMERGENCY: "Yield to Emergency",
-                ExemptionReason.POLICE_DIRECTION: "Police Direction",
-                ExemptionReason.EMERGENCY_AVOIDANCE: "Emergency Avoidance",
-                ExemptionReason.SIGNAL_MALFUNCTION: "Signal Malfunction",
-                ExemptionReason.ROAD_CONSTRUCTION: "Road Construction",
-                ExemptionReason.NONE: "",
+                AnomalyReason.EMERGENCY_VEHICLE: "Emergency Vehicle",
+                AnomalyReason.TRAFFIC_POLICE: "Traffic Police",
+                AnomalyReason.SIGNAL_MALFUNCTION: "Signal Malfunction",
+                AnomalyReason.NONE: "",
             }
-            reason = reason_map.get(record.exemption_reason, "")
+            reason = reason_map.get(record.anomaly_reason, "")
         self.violation_table.setItem(row, 5, QTableWidgetItem(reason))
 
-        details = record.exemption_details if record.is_exempted else f"Location: {record.location}"
+        details = ", ".join(record.nearby_objects) if record.is_anomaly and record.nearby_objects else f"Location: {record.location}"
         self.violation_table.setItem(row, 6, QTableWidgetItem(details))
 
         self.database.add_violation(
@@ -873,10 +871,10 @@ Snapshot filenames include timestamp for later manual review.</p>
             plate_number=record.plate_number,
             snapshot_path=record.snapshot_path,
             record_id=record.record_id,
-            is_exempted=record.is_exempted,
-            exemption_reason=record.exemption_reason.value if record.is_exempted else None,
-            exemption_details=record.exemption_details,
-            nearby_emergency_vehicles=record.nearby_emergency_vehicles
+            is_exempted=record.is_anomaly,
+            exemption_reason=record.anomaly_reason.value if record.is_anomaly else None,
+            exemption_details=", ".join(record.nearby_objects) if record.nearby_objects else None,
+            nearby_emergency_vehicles=record.nearby_objects
         )
 
     def _search_plate(self):
