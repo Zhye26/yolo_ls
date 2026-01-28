@@ -13,10 +13,10 @@ video:
 
 # YOLO 检测配置
 detector:
-  model_path: "yolo12n.pt"  # YOLOv12 模型路径
+  model_path: "models/yolo12n_vehicle.pt"  # 训练后的车辆检测模型
   confidence: 0.5
   iou_threshold: 0.45
-  classes: [2, 3, 5, 7]  # car, motorcycle, bus, truck
+  classes: [0, 1, 2, 3, 5]  # 3wheeler, bike, bus, car, truck (排除 person)
   device: "cuda"
 
 # ByteTrack 跟踪配置
@@ -40,8 +40,8 @@ violation:
 
 # OCR 配置
 ocr:
+  model_path: "models/plate_ocr.pt"  # CRNN 车牌识别模型
   use_gpu: true
-  lang: "ch"
 
 # 数据库配置
 database:
