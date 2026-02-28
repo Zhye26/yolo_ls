@@ -40,6 +40,7 @@ def run_cli(args):
     from src.video import VideoStream
     from src.core import VehicleDetector, ByteTracker, FeatureExtractor, AdaptiveViolationDetector
     from src.database import Database
+    from src.ocr import PlateReader
     from src.utils import load_config
 
     # 加载配置
@@ -63,11 +64,14 @@ def run_cli(args):
         pixel_to_meter=config.get('feature', {}).get('pixel_to_meter', 0.05),
         fps=config.get('video', {}).get('fps', 15)
     )
-    # 使用自适应违规检测器
     violation_detector = AdaptiveViolationDetector(
         speed_limit=config.get('violation', {}).get('speed_limit', 60),
         snapshot_dir=config.get('violation', {}).get('snapshot_dir', 'data/snapshots'),
         emergency_distance=config.get('violation', {}).get('emergency_distance', 300)
+    )
+    plate_reader = PlateReader(
+        model_path=config.get('ocr', {}).get('model_path', 'models/plate_ocr.pt'),
+        use_gpu=args.device != 'cpu'
     )
     database = Database()
 
@@ -75,12 +79,31 @@ def run_cli(args):
         print(f"Error: Cannot open video source: {args.source}")
         return 1
 
+    writer = None
+    if args.output:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        width, height = video.get_frame_size()
+        fps = video.get_fps()
+        if fps <= 0:
+            fps = config.get('video', {}).get('fps', 15)
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        writer = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
+        if not writer.isOpened():
+            print(f"Warning: Cannot open output writer: {output_path}")
+            writer = None
+
     print(f"Processing video: {args.source}")
     print(f"Model: {args.model}, Device: {args.device}")
+    if writer:
+        print(f"Output video: {args.output}")
     print("自适应违规检测已启用（支持特种车辆避让免责）")
     print("Press 'q' to quit")
 
     frame_count = 0
+    plate_cache = {}
+    seen_tracks = set()
+
     while True:
         ret, frame = video.read()
         if not ret:
@@ -88,41 +111,88 @@ def run_cli(args):
 
         frame_count += 1
 
-        # 检测
+        # 检测与跟踪
         detections = detector.detect_vehicles(frame)
-
-        # 跟踪
         tracks = tracker.update(detections)
 
-        # 获取所有车辆边界框用于特种车辆检测
-        vehicle_bboxes = [t.bbox for t in tracks]
-        violation_detector.update(frame, vehicle_bboxes)
+        # 交通灯和人员检测（尽力而为，兼容仅车辆模型）
+        person_bboxes = []
+        light_bbox = None
+        try:
+            persons = detector.detect_persons(frame)
+            person_bboxes = [det.bbox for det in persons]
+        except Exception:
+            pass
 
-        # 特征提取和违规检测
+        try:
+            traffic_lights = detector.detect_traffic_lights(frame)
+            if traffic_lights:
+                light_bbox = max(traffic_lights, key=lambda d: d.confidence).bbox
+        except Exception:
+            pass
+
+        # 更新违规检测上下文
+        vehicle_bboxes = [t.bbox for t in tracks]
+        violation_detector.update(
+            frame,
+            vehicle_bboxes,
+            person_bboxes=person_bboxes,
+            light_bbox=light_bbox
+        )
+
+        # 特征提取、车牌识别、违规检测
         for track in tracks:
+            plate_number = plate_cache.get(track.track_id)
+            if frame_count % 10 == 0:
+                plate_result = plate_reader.read(frame, track.bbox)
+                if plate_result:
+                    plate_number = plate_result.plate_number
+                    plate_cache[track.track_id] = plate_number
+
             features = feature_extractor.extract(frame, track.track_id, track.bbox)
 
-            # 自适应违规检测
+            # 维护车辆记录，支持车牌检索
+            if track.track_id in seen_tracks:
+                database.update_vehicle(
+                    track_id=track.track_id,
+                    speed=features.speed,
+                    direction=features.direction.value,
+                    plate_number=plate_number,
+                    vehicle_type=track.class_name,
+                    color=features.color,
+                )
+            else:
+                database.add_vehicle(
+                    track_id=track.track_id,
+                    plate_number=plate_number,
+                    vehicle_type=track.class_name,
+                    color=features.color,
+                    speed=features.speed,
+                    direction=features.direction.value,
+                )
+                seen_tracks.add(track.track_id)
+
             record = violation_detector.check_violation(
                 track_id=track.track_id,
                 bbox=track.bbox,
                 speed=features.speed,
-                frame=frame
+                frame=frame,
+                plate_number=plate_number,
             )
 
-            # 保存违规记录到数据库
             if record:
                 database.add_violation(
                     track_id=record.track_id,
                     violation_type=record.violation_type.value,
                     location=record.location,
                     speed=record.speed,
+                    plate_number=record.plate_number,
                     snapshot_path=record.snapshot_path,
                     record_id=record.record_id,
-                    is_exempted=record.is_exempted,
-                    exemption_reason=record.exemption_reason.value if record.is_exempted else None,
-                    exemption_details=record.exemption_details,
-                    nearby_emergency_vehicles=record.nearby_emergency_vehicles
+                    is_exempted=record.is_anomaly,
+                    exemption_reason=record.anomaly_reason.value if record.is_anomaly else None,
+                    exemption_details=", ".join(record.nearby_objects) if record.nearby_objects else None,
+                    nearby_emergency_vehicles=record.nearby_objects,
                 )
 
         # 绘制标注
@@ -130,24 +200,51 @@ def run_cli(args):
         for track in tracks:
             x1, y1, x2, y2 = track.bbox
             cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            plate = plate_cache.get(track.track_id)
+            if plate:
+                cv2.putText(
+                    annotated,
+                    plate,
+                    (x1, y2 + 18),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0, 255, 255),
+                    2,
+                )
 
-        # 显示统计
         stats = violation_detector.get_statistics()
-        cv2.putText(annotated, f"Vehicles: {len(tracks)}", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        cv2.putText(annotated, f"Violations: {stats['actual_violations']} | Exempted: {stats['exempted_count']}",
-                    (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        cv2.putText(
+            annotated,
+            f"Vehicles: {len(tracks)}",
+            (10, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (0, 255, 0),
+            2,
+        )
+        cv2.putText(
+            annotated,
+            f"Violations: {stats['actual_violations']} | Exempted: {stats['exempted_count']}",
+            (10, 60),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (0, 255, 255),
+            2,
+        )
 
-        # 显示
+        if writer:
+            writer.write(annotated)
+
         if not args.headless:
             cv2.imshow("Traffic Analysis - Adaptive Detection", annotated)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
 
     video.release()
+    if writer:
+        writer.release()
     cv2.destroyAllWindows()
 
-    # 输出最终统计
     final_stats = violation_detector.get_statistics()
     print(f"\n=== 处理完成 ===")
     print(f"处理帧数: {frame_count}")

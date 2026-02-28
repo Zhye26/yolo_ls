@@ -18,7 +18,17 @@ class Database:
         """
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_tables()
+
+        try:
+            self._init_tables()
+        except sqlite3.OperationalError as exc:
+            # 常见于 data 目录只读（如 Docker 以 root 创建后在宿主运行）
+            if "readonly" not in str(exc).lower() and "permission" not in str(exc).lower():
+                raise
+            fallback = Path('/tmp/traffic.db')
+            fallback.parent.mkdir(parents=True, exist_ok=True)
+            self.db_path = fallback
+            self._init_tables()
 
     @contextmanager
     def _get_connection(self):
@@ -95,6 +105,10 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_violations_time
                 ON violations(timestamp)
             ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_violations_plate
+                ON violations(plate_number)
+            ''')
 
     def add_vehicle(self, track_id: int, plate_number: Optional[str],
                     vehicle_type: str, color: str, speed: float,
@@ -112,16 +126,24 @@ class Database:
                   speed, direction))
             return cursor.lastrowid
 
-    def update_vehicle(self, track_id: int, speed: float, direction: str):
+    def update_vehicle(self, track_id: int, speed: float, direction: str,
+                      plate_number: Optional[str] = None,
+                      vehicle_type: Optional[str] = None,
+                      color: Optional[str] = None):
         """更新车辆记录"""
         now = datetime.now()
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 UPDATE vehicles
-                SET last_seen = ?, avg_speed = ?, direction = ?
+                SET last_seen = ?,
+                    avg_speed = ?,
+                    direction = ?,
+                    plate_number = COALESCE(?, plate_number),
+                    vehicle_type = COALESCE(?, vehicle_type),
+                    color = COALESCE(?, color)
                 WHERE track_id = ?
-            ''', (now, speed, direction, track_id))
+            ''', (now, speed, direction, plate_number, vehicle_type, color, track_id))
 
     def add_violation(self, track_id: int, violation_type: str,
                       location: tuple, speed: Optional[float] = None,
@@ -283,15 +305,49 @@ class Database:
             }
 
     def search_by_plate(self, plate_number: str) -> List[Dict[str, Any]]:
-        """按车牌号搜索"""
+        """按车牌号搜索（车辆表 + 违规表）"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
+
             cursor.execute('''
-                SELECT * FROM vehicles
+                SELECT
+                    'vehicle' as source,
+                    track_id,
+                    plate_number,
+                    vehicle_type,
+                    color,
+                    first_seen as timestamp,
+                    last_seen,
+                    avg_speed as speed,
+                    direction,
+                    NULL as violation_type,
+                    NULL as snapshot_path
+                FROM vehicles
                 WHERE plate_number LIKE ?
-                ORDER BY last_seen DESC
             ''', (f'%{plate_number}%',))
-            return [dict(row) for row in cursor.fetchall()]
+            vehicle_results = [dict(row) for row in cursor.fetchall()]
+
+            cursor.execute('''
+                SELECT
+                    'violation' as source,
+                    track_id,
+                    plate_number,
+                    NULL as vehicle_type,
+                    NULL as color,
+                    timestamp,
+                    NULL as last_seen,
+                    speed,
+                    NULL as direction,
+                    violation_type,
+                    snapshot_path
+                FROM violations
+                WHERE plate_number LIKE ?
+            ''', (f'%{plate_number}%',))
+            violation_results = [dict(row) for row in cursor.fetchall()]
+
+            results = vehicle_results + violation_results
+            results.sort(key=lambda item: item.get('timestamp') or '', reverse=True)
+            return results
 
     def clear_old_records(self, days: int = 30):
         """清理旧记录"""

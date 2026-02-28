@@ -44,6 +44,8 @@ class VehicleDetector:
 
     # 交通灯类别
     TRAFFIC_LIGHT_CLASS = 9
+    # 人员类别（用于交警检测输入）
+    PERSON_CLASS = 0
 
     def __init__(self, model_path: str = "yolo12n.pt",
                  confidence: float = 0.2,
@@ -116,6 +118,10 @@ class VehicleDetector:
     def detect_traffic_lights(self, frame: np.ndarray) -> List[Detection]:
         """检测交通灯"""
         return self.detect(frame, [self.TRAFFIC_LIGHT_CLASS])
+
+    def detect_persons(self, frame: np.ndarray) -> List[Detection]:
+        """检测人员（用于交警识别）"""
+        return self.detect(frame, [self.PERSON_CLASS])
 
     def detect_all(self, frame: np.ndarray) -> Tuple[List[Detection], List[Detection]]:
         """检测车辆和交通灯"""

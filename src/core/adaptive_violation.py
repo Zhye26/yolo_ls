@@ -59,6 +59,42 @@ class ViolationRecord:
     anomaly_reason: AnomalyReason = AnomalyReason.NONE  # 异常原因
     nearby_objects: List[str] = field(default_factory=list)  # 附近特殊对象
 
+    # ---- Backward compatibility for older callers ----
+    @property
+    def is_exempted(self) -> bool:
+        return self.is_anomaly
+
+    @is_exempted.setter
+    def is_exempted(self, value: bool):
+        self.is_anomaly = bool(value)
+
+    @property
+    def exemption_reason(self) -> AnomalyReason:
+        return self.anomaly_reason
+
+    @exemption_reason.setter
+    def exemption_reason(self, value: AnomalyReason):
+        self.anomaly_reason = value
+
+    @property
+    def nearby_emergency_vehicles(self) -> List[str]:
+        return self.nearby_objects
+
+    @nearby_emergency_vehicles.setter
+    def nearby_emergency_vehicles(self, value: Optional[List[str]]):
+        self.nearby_objects = list(value or [])
+
+    @property
+    def exemption_details(self) -> str:
+        return ", ".join(self.nearby_objects)
+
+    @exemption_details.setter
+    def exemption_details(self, value: Optional[str]):
+        if not value:
+            self.nearby_objects = []
+        else:
+            self.nearby_objects = [item.strip() for item in value.split(",") if item.strip()]
+
 
 # 兼容旧代码
 ExemptionReason = AnomalyReason

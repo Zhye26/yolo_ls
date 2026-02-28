@@ -233,6 +233,7 @@ class VideoThread(QThread):
 
             self.running = True
             frame_count = 0
+            plate_cache = {}
 
             for frame in self.video_stream.frames():
                 if not self.running:
@@ -243,7 +244,29 @@ class VideoThread(QThread):
                 detections = self.detector.detect_vehicles(frame)
                 tracks = self.tracker.update(detections)
                 vehicle_bboxes = [t.bbox for t in tracks]
-                self.violation_detector.update(frame, vehicle_bboxes)
+
+                # 交通灯/人员检测（兼容仅车辆模型）
+                person_bboxes = []
+                light_bbox = None
+                try:
+                    persons = self.detector.detect_persons(frame)
+                    person_bboxes = [det.bbox for det in persons]
+                except Exception:
+                    pass
+
+                try:
+                    traffic_lights = self.detector.detect_traffic_lights(frame)
+                    if traffic_lights:
+                        light_bbox = max(traffic_lights, key=lambda d: d.confidence).bbox
+                except Exception:
+                    pass
+
+                self.violation_detector.update(
+                    frame,
+                    vehicle_bboxes,
+                    person_bboxes=person_bboxes,
+                    light_bbox=light_bbox,
+                )
 
                 # Prepare track data for ST-GAT and collision prediction
                 track_data = [
@@ -252,7 +275,7 @@ class VideoThread(QThread):
                 ]
 
                 # Update interaction graph
-                interaction_embeddings = self.interaction_graph.update(track_data)
+                self.interaction_graph.update(track_data)
 
                 # Predict collision risks
                 collision_risks = self.collision_predictor.update(track_data)
@@ -262,6 +285,15 @@ class VideoThread(QThread):
                 plate_results = {}  # track_id -> plate_number
 
                 for track in tracks:
+                    plate_number = plate_cache.get(track.track_id)
+                    # 车牌识别（每10帧识别一次以减少计算量）
+                    if frame_count % 10 == 0 and self.plate_reader:
+                        plate_result = self.plate_reader.read(frame, track.bbox)
+                        if plate_result:
+                            plate_number = plate_result.plate_number
+                            plate_cache[track.track_id] = plate_number
+                            plate_results[track.track_id] = plate_number
+
                     features = self.feature_extractor.extract(
                         frame, track.track_id, track.bbox
                     )
@@ -271,16 +303,11 @@ class VideoThread(QThread):
                         track_id=track.track_id,
                         bbox=track.bbox,
                         speed=features.speed,
-                        frame=frame
+                        frame=frame,
+                        plate_number=plate_number,
                     )
                     if record:
                         violations.append(record)
-
-                    # 车牌识别（每10帧识别一次以减少计算量）
-                    if frame_count % 10 == 0 and self.plate_reader:
-                        plate_result = self.plate_reader.read(frame, track.bbox)
-                        if plate_result:
-                            plate_results[track.track_id] = plate_result.plate_number
 
                 # Draw annotations including collision risks
                 annotated_frame = self.violation_detector.draw_annotations(frame)
@@ -294,7 +321,6 @@ class VideoThread(QThread):
                 if frame_count % 30 == 0:
                     stats = self.violation_detector.get_statistics()
                     stats['emergency_vehicles'] = len(self.violation_detector.current_emergency_vehicles)
-                    # Add collision risk stats
                     risk_summary = self.collision_predictor.get_risk_summary(collision_risks)
                     stats['collision_risks'] = risk_summary
                     self.stats_updated.emit(stats)
@@ -323,6 +349,8 @@ class MainWindow(QMainWindow):
         self.video_thread: Optional[VideoThread] = None
         self.database = Database()
         self.current_frame: Optional[np.ndarray] = None
+        self._plate_cache: Dict[int, str] = {}
+        self._seen_vehicle_tracks = set()
 
         self.config = {
             'fps': 15,
@@ -651,6 +679,9 @@ Snapshot filenames include timestamp for later manual review.</p>
         else:
             self.config['stop_line'] = None
 
+        self._plate_cache = {}
+        self._seen_vehicle_tracks = set()
+
         self.video_thread = VideoThread(source, self.config)
         self.video_thread.frame_ready.connect(self._on_frame_ready)
         self.video_thread.stats_updated.connect(self._on_stats_updated)
@@ -668,6 +699,9 @@ Snapshot filenames include timestamp for later manual review.</p>
             self.video_thread.stop()
             self.video_thread = None
 
+        self._plate_cache = {}
+        self._seen_vehicle_tracks = set()
+
         self.btn_open.setEnabled(True)
         self.btn_camera.setEnabled(True)
         self.btn_stop.setEnabled(False)
@@ -681,8 +715,6 @@ Snapshot filenames include timestamp for later manual review.</p>
 
         # 保存车牌识别结果
         if plate_results:
-            if not hasattr(self, '_plate_cache'):
-                self._plate_cache = {}
             self._plate_cache.update(plate_results)
 
         for i, track in enumerate(tracks):
@@ -757,8 +789,31 @@ Snapshot filenames include timestamp for later manual review.</p>
                 self.vehicle_table.setItem(i, 4, QTableWidgetItem("-"))
 
             # 添加车牌信息
-            plate = getattr(self, '_plate_cache', {}).get(track.track_id, "-")
+            plate = self._plate_cache.get(track.track_id, "-")
             self.vehicle_table.setItem(i, 5, QTableWidgetItem(plate if plate else "-"))
+
+            # 维护车辆数据库记录（支持车牌检索）
+            if i < len(features_list):
+                f = features_list[i]
+                if track.track_id in self._seen_vehicle_tracks:
+                    self.database.update_vehicle(
+                        track_id=track.track_id,
+                        speed=f.speed,
+                        direction=f.direction.value,
+                        plate_number=plate if plate and plate != "-" else None,
+                        vehicle_type=track.class_name,
+                        color=f.color,
+                    )
+                else:
+                    self.database.add_vehicle(
+                        track_id=track.track_id,
+                        plate_number=plate if plate and plate != "-" else None,
+                        vehicle_type=track.class_name,
+                        color=f.color,
+                        speed=f.speed,
+                        direction=f.direction.value,
+                    )
+                    self._seen_vehicle_tracks.add(track.track_id)
 
         for record in violations:
             self._add_violation_record(record)
