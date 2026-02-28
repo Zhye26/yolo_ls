@@ -215,10 +215,18 @@ class VideoThread(QThread):
 
             # Initialize ST-GAT and Collision Risk Predictor
             self.interaction_graph = VehicleInteractionGraph(
-                distance_threshold=self.config.get('interaction_distance', 200)
+                distance_threshold=self.config.get('interaction_distance', 200),
+                temporal_window=self.config.get('risk_temporal_window', 10),
+                model_path=self.config.get('stgat_model_path'),
+                device=self.config.get('device', 'cpu'),
             )
             self.collision_predictor = CollisionRiskPredictor(
-                fps=self.config.get('fps', 15)
+                history_length=self.config.get('risk_history_length', 10),
+                prediction_horizon=self.config.get('risk_prediction_horizon', 15),
+                fps=self.config.get('fps', 15),
+                collision_threshold=self.config.get('risk_collision_threshold', 150.0),
+                model_path=self.config.get('collision_model_path'),
+                device=self.config.get('device', 'cpu'),
             )
 
             # Initialize Plate Reader
@@ -356,6 +364,8 @@ class MainWindow(QMainWindow):
             'fps': 15,
             'model_path': 'models/yolo12n_vehicle.pt',
             'plate_model_path': 'models/plate_ocr.pt',
+            'stgat_model_path': None,
+            'collision_model_path': None,
             'confidence': 0.2,
             'device': 'cuda',
             'track_thresh': 0.5,
@@ -364,6 +374,11 @@ class MainWindow(QMainWindow):
             'speed_limit': 60,
             'snapshot_dir': 'data/snapshots',
             'emergency_distance': 300,
+            'interaction_distance': 200,
+            'risk_temporal_window': 10,
+            'risk_history_length': 10,
+            'risk_prediction_horizon': 15,
+            'risk_collision_threshold': 150.0,
             'stop_line': None
         }
 

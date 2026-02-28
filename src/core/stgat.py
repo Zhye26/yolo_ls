@@ -9,9 +9,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from typing import List, Tuple, Dict, Optional
+from typing import List, Tuple, Dict, Optional, Any
 from dataclasses import dataclass
 from collections import deque
+from pathlib import Path
 
 
 @dataclass
@@ -140,14 +141,20 @@ class VehicleInteractionGraph:
     """
     def __init__(self,
                  distance_threshold: float = 200.0,
-                 temporal_window: int = 10):
+                 temporal_window: int = 10,
+                 model_path: Optional[str] = None,
+                 device: str = "cpu"):
         """
         Args:
             distance_threshold: Max distance for edge connection (pixels)
             temporal_window: Number of frames to keep in history
+            model_path: Optional ST-GAT checkpoint path
+            device: cpu/cuda
         """
         self.distance_threshold = distance_threshold
         self.temporal_window = temporal_window
+        use_cuda = device == "cuda" and torch.cuda.is_available()
+        self.device = torch.device("cuda" if use_cuda else "cpu")
 
         # Track history for each vehicle
         self.track_history: Dict[int, deque] = {}
@@ -157,8 +164,41 @@ class VehicleInteractionGraph:
             node_features=8,
             hidden_dim=32,
             output_dim=16
-        )
+        ).to(self.device)
+
+        if model_path:
+            self.load_model(model_path)
+
         self.model.eval()
+
+    def load_model(self, model_path: str) -> bool:
+        """Load trained ST-GAT checkpoint."""
+        path = Path(model_path)
+        if not path.exists():
+            return False
+
+        checkpoint = torch.load(path, map_location=self.device)
+        if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
+            state_dict = checkpoint['state_dict']
+        else:
+            state_dict = checkpoint
+
+        self.model.load_state_dict(state_dict, strict=False)
+        self.model.eval()
+        return True
+
+    def save_model(self, model_path: str, extra: Optional[Dict[str, Any]] = None):
+        """Save ST-GAT checkpoint."""
+        path = Path(model_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload: Dict[str, Any] = {
+            'state_dict': self.model.state_dict(),
+            'distance_threshold': self.distance_threshold,
+            'temporal_window': self.temporal_window,
+        }
+        if extra:
+            payload.update(extra)
+        torch.save(payload, path)
 
     def update(self, tracks: List[Dict]) -> Dict[int, np.ndarray]:
         """
@@ -201,10 +241,10 @@ class VehicleInteractionGraph:
 
         # Run ST-GAT
         with torch.no_grad():
-            node_features_t = torch.FloatTensor(node_features)
-            adj_matrix_t = torch.FloatTensor(adj_matrix)
+            node_features_t = torch.FloatTensor(node_features).to(self.device)
+            adj_matrix_t = torch.FloatTensor(adj_matrix).to(self.device)
             embeddings = self.model(node_features_t, adj_matrix_t)
-            embeddings = embeddings.numpy()
+            embeddings = embeddings.cpu().numpy()
 
         # Map back to track IDs
         result = {}

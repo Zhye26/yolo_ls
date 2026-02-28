@@ -157,7 +157,9 @@ yolo_ls/
 │   ├── batch_detect.py           # 批量检测（含碰撞风险）
 │   ├── demo_collision.py         # 碰撞风险演示
 │   ├── demo_yielding.py          # 避让特种车辆演示
-│   ├── train.py                  # 模型训练
+│   ├── train.py                  # YOLO 检测模型训练
+│   ├── train_collision_predictor.py # 碰撞轨迹预测模型训练
+│   ├── train_stgat.py            # ST-GAT 交互模型训练
 │   ├── prepare_dataset.py        # 数据集准备
 │   ├── compare_models.py         # 模型对比
 │   └── visualize.py              # 可视化工具
@@ -275,6 +277,37 @@ python3 scripts/evaluate_project.py --ocr-samples 150 --bench-samples 100 --devi
 输出文件：
 - `docs/evaluation/baseline_report.md`
 - `docs/evaluation/baseline_metrics.json`
+
+---
+
+
+## 模型落地闭环（训练 + 实时推理 + 结构化输出）
+
+### 1) 训练检测模型（外部数据集微调）
+
+```bash
+python3 scripts/train.py   --model yolo12m.pt   --data datasets/vehicle_detection/data.yaml   --epochs 100   --batch 16   --device 0
+```
+
+### 2) 训练碰撞轨迹预测模型（LSTM）
+
+```bash
+python3 scripts/train_collision_predictor.py   --source /path/to/video_or_dir   --model models/yolo12n_vehicle.pt   --history-length 10   --prediction-horizon 15   --epochs 20   --device cpu
+```
+
+### 3) 训练 ST-GAT 交互模型
+
+```bash
+python3 scripts/train_stgat.py   --source /path/to/video_or_dir   --model models/yolo12n_vehicle.pt   --epochs 20   --device cpu
+```
+
+### 4) 实时推理并导出结构化结果（JSONL）
+
+```bash
+python3 main.py   --source 0   --model models/yolo12n_vehicle.pt   --collision-model experiments/collision_predictor_xxx/best.pt   --stgat-model experiments/stgat_xxx/best.pt   --risk-output data/realtime_events.jsonl   --output data/realtime_demo.mp4
+```
+
+`--risk-output` 会逐帧输出车辆信息、违规事件、碰撞风险和风险摘要，便于后续数据分析与论文制图。
 
 ---
 

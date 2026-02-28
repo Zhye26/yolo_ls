@@ -8,10 +8,11 @@ Time-To-Collision (TTC) analysis for proactive safety warnings.
 import torch
 import torch.nn as nn
 import numpy as np
-from typing import List, Tuple, Dict, Optional
+from typing import List, Tuple, Dict, Optional, Any
 from dataclasses import dataclass
 from enum import Enum
 from collections import deque
+from pathlib import Path
 import cv2
 
 
@@ -113,7 +114,9 @@ class CollisionRiskPredictor:
                  prediction_horizon: int = 15,
                  fps: float = 15.0,
                  collision_threshold: float = 150.0,  # 增大默认阈值适应高分辨率
-                 ttc_thresholds: Dict[str, float] = None):
+                 ttc_thresholds: Dict[str, float] = None,
+                 model_path: Optional[str] = None,
+                 device: str = "cpu"):
         """
         Args:
             history_length: Number of historical frames to use
@@ -121,11 +124,15 @@ class CollisionRiskPredictor:
             fps: Video frame rate
             collision_threshold: Distance threshold for collision (pixels)
             ttc_thresholds: Time-to-collision thresholds for risk levels
+            model_path: Optional trained trajectory model path
+            device: cpu/cuda
         """
         self.history_length = history_length
         self.prediction_horizon = prediction_horizon
         self.fps = fps
         self.collision_threshold = collision_threshold
+        use_cuda = device == "cuda" and torch.cuda.is_available()
+        self.device = torch.device("cuda" if use_cuda else "cpu")
 
         # Default TTC thresholds (in seconds)
         self.ttc_thresholds = ttc_thresholds or {
@@ -143,8 +150,43 @@ class CollisionRiskPredictor:
             input_dim=4,
             hidden_dim=64,
             pred_horizon=prediction_horizon
-        )
+        ).to(self.device)
+
+        if model_path:
+            self.load_model(model_path)
+
         self.predictor.eval()
+
+    def load_model(self, model_path: str) -> bool:
+        """Load trained trajectory predictor checkpoint."""
+        path = Path(model_path)
+        if not path.exists():
+            return False
+
+        checkpoint = torch.load(path, map_location=self.device)
+        if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
+            state_dict = checkpoint['state_dict']
+        else:
+            state_dict = checkpoint
+
+        self.predictor.load_state_dict(state_dict, strict=False)
+        self.predictor.eval()
+        return True
+
+    def save_model(self, model_path: str, extra: Optional[Dict[str, Any]] = None):
+        """Save trajectory predictor checkpoint."""
+        path = Path(model_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload: Dict[str, Any] = {
+            'state_dict': self.predictor.state_dict(),
+            'history_length': self.history_length,
+            'prediction_horizon': self.prediction_horizon,
+            'fps': self.fps,
+            'collision_threshold': self.collision_threshold,
+        }
+        if extra:
+            payload.update(extra)
+        torch.save(payload, path)
 
     def update(self, tracks: List[Dict]) -> List[CollisionRisk]:
         """
@@ -237,8 +279,8 @@ class CollisionRiskPredictor:
 
         # Predict
         with torch.no_grad():
-            x = torch.FloatTensor(input_seq).unsqueeze(0)
-            pred = self.predictor(x).squeeze(0).numpy()
+            x = torch.FloatTensor(input_seq).unsqueeze(0).to(self.device)
+            pred = self.predictor(x).squeeze(0).cpu().numpy()
 
         # Denormalize
         pred += mean_pos
