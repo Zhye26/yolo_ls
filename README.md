@@ -264,6 +264,20 @@ emergency_vehicles = ev_detector.detect(frame, vehicle_bboxes)
 
 ---
 
+## 基线评估（毕设答辩建议）
+
+项目提供自动化评估脚本，可一键生成基线指标（检测训练指标、OCR抽样准确率、轻量推理FPS、pytest结果）：
+
+```bash
+python3 scripts/evaluate_project.py --ocr-samples 150 --bench-samples 100 --device cpu
+```
+
+输出文件：
+- `docs/evaluation/baseline_report.md`
+- `docs/evaluation/baseline_metrics.json`
+
+---
+
 ## 作者
 
 GitHub: https://github.com/Zhye26/yolo_ls
